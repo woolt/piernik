@@ -205,6 +205,9 @@ contains
       use constants,      only: DIVB_CT, RTVD_SPLIT
       use ct,             only: magfield
       use global,         only: divB_0_method, which_solver
+#ifdef RESISTIVE
+      use resistivity,    only: diffuse_mag
+#endif /* RESISTIVE */
 #endif /* MAGNETIC */
 #ifdef DEBUG
       use piernikiodebug, only: force_dumps
@@ -228,7 +231,13 @@ contains
             if (use_CRsplit) call cr_diff(dir)
 #endif /* COSM_RAYS */
 #ifdef MAGNETIC
-            if (divB_0_method == DIVB_CT) call magfield(dir)
+            if (divB_0_method == DIVB_CT) then
+               call magfield(dir)
+#ifdef RESISTIVE
+            else
+               call diffuse_mag(dir)
+#endif /* RESISTIVE */
+            endif
 #endif /* MAGNETIC */
          endif
 
@@ -236,7 +245,13 @@ contains
 
          if (forward) then
 #ifdef MAGNETIC
-            if (divB_0_method == DIVB_CT) call magfield(dir)
+            if (divB_0_method == DIVB_CT) then
+               call magfield(dir)
+#ifdef RESISTIVE
+            else
+               call diffuse_mag(dir)
+#endif /* RESISTIVE */
+            endif
 #endif /* MAGNETIC */
 #ifdef COSM_RAYS
             if (use_CRsplit) call cr_diff(dir)

@@ -39,7 +39,7 @@ module resistivity
    implicit none
 
    private
-   public  :: init_resistivity, timestep_resist, cleanup_resistivity, etamax, diffuseb, cu2max, deimin, eta1_active
+   public  :: init_resistivity, timestep_resist, cleanup_resistivity, etamax, diffuseb, cu2max, deimin, eta1_active, diffuse_mag
 
    real                                  :: cfl_resist                     !< CFL factor for resistivity effect
    real                                  :: eta_0                          !< uniform resistivity
@@ -479,5 +479,46 @@ contains
       enddo
 
    end subroutine diffuseb
+
+   subroutine diffuse_mag(swp)
+
+      use cg_leaves,        only: leaves
+      use cg_list,          only: cg_list_element
+      use constants,        only: idm, xdim, zdim, ndims, two, I_TWO, LO, HI
+      use global,           only: dt
+      use grid_cont,        only: grid_container
+      use named_array_list, only: wna
+
+      implicit none
+
+      integer(kind=4), intent(in)             :: swp
+      integer(kind=4)                         :: dir
+      integer(kind=4), dimension(ndims,LO:HI) :: i0, im, ip
+      real, dimension(:,:,:,:), pointer       :: b0, bm, bp
+      real                                    :: df
+      type(cg_list_element),    pointer       :: cgl
+      type(grid_container),     pointer       :: cg
+
+      df = eta_0 * dt
+
+      cgl => leaves%first
+      do while (associated(cgl))
+         cg => cgl%cg
+
+         i0(:,LO) = cg%lhn(:,LO) + idm(:,swp)
+         i0(:,HI) = cg%lhn(:,HI) - idm(:,swp)
+         im = cg%lhn ; im(:,HI) = im(:,HI) - I_TWO * idm(:,swp)
+         ip = cg%lhn ; ip(:,LO) = ip(:,LO) + I_TWO * idm(:,swp)
+         b0 => cg%w(wna%bi)%span(i0)
+         bm => cg%w(wna%bi)%span(im)
+         bp => cg%w(wna%bi)%span(ip)
+         do dir = xdim, zdim
+            b0(dir,:,:,:) = cg%b(dir,:,:,:) + (bp(dir,:,:,:) + bm(dir,:,:,:) - two*b0(dir,:,:,:)) * df
+         enddo
+
+         cgl => cgl%nxt
+      enddo
+
+   end subroutine diffuse_mag
 
 end module resistivity
