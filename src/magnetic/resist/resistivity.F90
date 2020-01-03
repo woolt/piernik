@@ -513,7 +513,7 @@ contains
          bm => cg%w(wna%bi)%span(im)
          bp => cg%w(wna%bi)%span(ip)
          do dir = xdim, zdim
-            b0(dir,:,:,:) = cg%b(dir,:,:,:) + (bp(dir,:,:,:) + bm(dir,:,:,:) - two*b0(dir,:,:,:)) * df
+            b0(dir,:,:,:) = b0(dir,:,:,:) + (bp(dir,:,:,:) + bm(dir,:,:,:) - two*b0(dir,:,:,:)) * df
          enddo
 
          cgl => cgl%nxt
