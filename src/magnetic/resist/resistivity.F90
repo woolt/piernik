@@ -295,9 +295,10 @@ contains
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: big, zero, pMIN, MAXL
+      use constants,        only: big, zero, pMIN, MAXL, DIVB_CT
       use grid_cont,        only: grid_container
       use func,             only: operator(.notequals.)
+      use global,           only: divB_0_method
       use mpisetup,         only: piernik_MPI_Allreduce, piernik_MPI_Bcast
       use named_array_list, only: qna
 #ifndef ISO
@@ -322,11 +323,15 @@ contains
 #endif /* !ISO && IONIZED */
 
       dt_eta = big ; dt_eint = big
-      call compute_resist
-      call leaves%get_extremum(qna%ind(eta_n), MAXL, etamax)
-      call piernik_MPI_Bcast(etamax%val)
-      call leaves%get_extremum(qna%ind(wb_n), MAXL, cu2max)
-      call piernik_MPI_Bcast(cu2max%val)
+      if (divB_0_method == DIVB_CT) then
+         call compute_resist
+         call leaves%get_extremum(qna%ind(eta_n), MAXL, etamax)
+         call piernik_MPI_Bcast(etamax%val)
+         call leaves%get_extremum(qna%ind(wb_n), MAXL, cu2max)
+         call piernik_MPI_Bcast(cu2max%val)
+      else
+         etamax%val = eta_0
+      endif
 
       if (etamax%val .notequals. zero) then
          cgl => leaves%first
@@ -335,14 +340,16 @@ contains
             dt_eta = min(dt_eta, cfl_resist * cg%dxmn**2 / (2. * etamax%val))
 #ifndef ISO
 #ifdef IONIZED
-            eta => cg%q(qna%ind(eta_n))%span(cg%ijkse)
-            wb => cg%q(qna%ind(wb_n))%span(cg%ijkse)
-            eh => cg%q(qna%ind(eh_n))%span(cg%ijkse)
-            uu => cg%w(wna%fi)%span(cg%ijkse)
-            bb => cg%W(wna%bi)%span(cg%ijkse)
-            eh = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
-                  emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * wb + small)
-            dt_eint = min(dt_eint, deint_max * abs(minval(eh)))
+            if (divB_0_method == DIVB_CT) then
+               eta => cg%q(qna%ind(eta_n))%span(cg%ijkse)
+               wb => cg%q(qna%ind(wb_n))%span(cg%ijkse)
+               eh => cg%q(qna%ind(eh_n))%span(cg%ijkse)
+               uu => cg%w(wna%fi)%span(cg%ijkse)
+               bb => cg%W(wna%bi)%span(cg%ijkse)
+               eh = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
+                    emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * wb + small)
+               dt_eint = min(dt_eint, deint_max * abs(minval(eh)))
+            endif
 #endif /* IONIZED */
 #endif /* !ISO */
             cgl => cgl%nxt
@@ -350,14 +357,16 @@ contains
       endif
 
       call piernik_MPI_Allreduce(dt_eta, pMIN)
+      if (divB_0_method == DIVB_CT) then
 #ifndef ISO
 #ifdef IONIZED
-      call piernik_MPI_Allreduce(dt_eint, pMIN)
+         call piernik_MPI_Allreduce(dt_eint, pMIN)
 #endif /* IONIZED */
-      call leaves%get_extremum(qna%ind(eh_n), MINL, deimin)
-      deimin%assoc = dt_eint
+         call leaves%get_extremum(qna%ind(eh_n), MINL, deimin)
+         deimin%assoc = dt_eint
 #endif /* !ISO */
-      etamax%assoc = dt_eta ; cu2max%assoc = min(dt_eta, dt_eint)
+         etamax%assoc = dt_eta ; cu2max%assoc = min(dt_eta, dt_eint)
+      endif
 
       dt = min(dt, dt_eta, dt_eint)
 
