@@ -484,7 +484,7 @@ contains
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: idm, xdim, zdim, ndims, two, I_TWO, LO, HI
+      use constants,        only: idm, ndims, two, I_TWO, LO, HI
       use global,           only: dt
       use grid_cont,        only: grid_container
       use named_array_list, only: wna
@@ -492,18 +492,17 @@ contains
       implicit none
 
       integer(kind=4), intent(in)             :: swp
-      integer(kind=4)                         :: dir
       integer(kind=4), dimension(ndims,LO:HI) :: i0, im, ip
       real, dimension(:,:,:,:), pointer       :: b0, bm, bp
       real                                    :: df
       type(cg_list_element),    pointer       :: cgl
       type(grid_container),     pointer       :: cg
 
-      df = eta_0 * dt
-
       cgl => leaves%first
       do while (associated(cgl))
          cg => cgl%cg
+
+         df = eta_0 * dt / cg%dl(swp)**2
 
          i0(:,LO) = cg%lhn(:,LO) + idm(:,swp)
          i0(:,HI) = cg%lhn(:,HI) - idm(:,swp)
@@ -512,9 +511,7 @@ contains
          b0 => cg%w(wna%bi)%span(i0)
          bm => cg%w(wna%bi)%span(im)
          bp => cg%w(wna%bi)%span(ip)
-         do dir = xdim, zdim
-            b0(dir,:,:,:) = b0(dir,:,:,:) + (bp(dir,:,:,:) + bm(dir,:,:,:) - two*b0(dir,:,:,:)) * df
-         enddo
+         b0 = b0 + (bp + bm - two*b0) * df
 
          cgl => cgl%nxt
       enddo
