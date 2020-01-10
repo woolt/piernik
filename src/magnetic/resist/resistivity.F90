@@ -489,38 +489,45 @@ contains
 
    end subroutine diffuseb
 
-   subroutine diffuse_mag(swp)
+   subroutine diffuse_mag
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: idm, ndims, two, I_TWO, LO, HI
-      use global,           only: dt
+      use constants,        only: idm, ndims, xdim, zdim, two, I_TWO, LO, HI, DIVB_CT
+      use domain,           only: dom
+      use global,           only: dt, divB_0_method
       use grid_cont,        only: grid_container
       use named_array_list, only: wna
 
       implicit none
 
-      integer(kind=4), intent(in)             :: swp
+      integer(kind=4)                         :: dir
       integer(kind=4), dimension(ndims,LO:HI) :: i0, im, ip
       real, dimension(:,:,:,:), pointer       :: b0, bm, bp
       real                                    :: df
       type(cg_list_element),    pointer       :: cgl
       type(grid_container),     pointer       :: cg
 
+      if (divB_0_method == DIVB_CT) return
+
       cgl => leaves%first
       do while (associated(cgl))
          cg => cgl%cg
 
-         df = eta_0 * dt / cg%dl(swp)**2
+         do dir = xdim, zdim
+            if (.not.dom%has_dir(dir)) cycle
 
-         i0(:,LO) = cg%lhn(:,LO) + idm(:,swp)
-         i0(:,HI) = cg%lhn(:,HI) - idm(:,swp)
-         im = cg%lhn ; im(:,HI) = im(:,HI) - I_TWO * idm(:,swp)
-         ip = cg%lhn ; ip(:,LO) = ip(:,LO) + I_TWO * idm(:,swp)
-         b0 => cg%w(wna%bi)%span(i0)
-         bm => cg%w(wna%bi)%span(im)
-         bp => cg%w(wna%bi)%span(ip)
-         b0 = b0 + (bp + bm - two*b0) * df
+            df = two * eta_0 * dt / cg%dl(dir)**2
+
+            i0(:,LO) = cg%lhn(:,LO) + idm(:,dir)
+            i0(:,HI) = cg%lhn(:,HI) - idm(:,dir)
+            im = cg%lhn ; im(:,HI) = im(:,HI) - I_TWO * idm(:,dir)
+            ip = cg%lhn ; ip(:,LO) = ip(:,LO) + I_TWO * idm(:,dir)
+            b0 => cg%w(wna%bi)%span(i0)
+            bm => cg%w(wna%bi)%span(im)
+            bp => cg%w(wna%bi)%span(ip)
+            b0 = b0 + (bp + bm - two*b0) * df
+         enddo
 
          cgl => cgl%nxt
       enddo

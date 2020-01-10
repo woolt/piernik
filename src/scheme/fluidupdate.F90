@@ -130,6 +130,9 @@ contains
       use initcosmicrays,      only: use_CRsplit
       use multigrid_diffusion, only: multigrid_solve_diff
 #endif /* COSM_RAYS && MULTIGRID */
+#ifdef RESISTIVE
+      use resistivity,         only: diffuse_mag
+#endif /* RESISTIVE */
 #ifdef SHEAR
       use shear,               only: shear_3sweeps
 #endif /* SHEAR */
@@ -169,6 +172,9 @@ contains
             do s = xdim, zdim
                if (.not.skip_sweep(s)) call make_sweep(s, forward)
             enddo
+#ifdef RESISTIVE
+            call diffuse_mag
+#endif /* RESISTIVE */
          else
             do s = zdim, xdim, -I_ONE
                if (.not.skip_sweep(s)) call make_sweep(s, forward)
@@ -205,9 +211,6 @@ contains
       use constants,      only: DIVB_CT, RTVD_SPLIT
       use ct,             only: magfield
       use global,         only: divB_0_method, which_solver
-#ifdef RESISTIVE
-      use resistivity,    only: diffuse_mag
-#endif /* RESISTIVE */
 #endif /* MAGNETIC */
 #ifdef DEBUG
       use piernikiodebug, only: force_dumps
@@ -231,13 +234,7 @@ contains
             if (use_CRsplit) call cr_diff(dir)
 #endif /* COSM_RAYS */
 #ifdef MAGNETIC
-            if (divB_0_method == DIVB_CT) then
-               call magfield(dir)
-#ifdef RESISTIVE
-            else
-               call diffuse_mag(dir)
-#endif /* RESISTIVE */
-            endif
+            if (divB_0_method == DIVB_CT) call magfield(dir)
 #endif /* MAGNETIC */
          endif
 
@@ -245,13 +242,7 @@ contains
 
          if (forward) then
 #ifdef MAGNETIC
-            if (divB_0_method == DIVB_CT) then
-               call magfield(dir)
-#ifdef RESISTIVE
-            else
-               call diffuse_mag(dir)
-#endif /* RESISTIVE */
-            endif
+            if (divB_0_method == DIVB_CT) call magfield(dir)
 #endif /* MAGNETIC */
 #ifdef COSM_RAYS
             if (use_CRsplit) call cr_diff(dir)
