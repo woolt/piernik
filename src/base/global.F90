@@ -397,7 +397,7 @@ contains
             if (master .and. .false.) call warn("[global:init_global] In case of problems with stability connected with checkerboard pattern in the psi field consider reducing CFL parameter (or just CFL_GLM). This solver also doesn't like sudden changes of timestep length.")
             ! ToDo: create a way to add this to the crash message.
 #ifdef RESISTIVE
-            call warn("[global:init_global] RESISTIVE for DIVB_HDC is implemented EXPERIMENTALLY")
+            if (master) call warn("[global:init_global] RESISTIVE for DIVB_HDC is implemented EXPERIMENTALLY")
 #endif /* RESISTIVE */
          case default
             call die("[global:init_global] unrecognized divergence cleaning description.")
