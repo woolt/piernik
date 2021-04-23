@@ -301,7 +301,7 @@ contains
       use MPIF,             only: MPI_DOUBLE_PRECISION, MPI_COMM_WORLD, MPI_Irecv, MPI_Isend
       use mpisetup,         only: FIRST, LAST, proc, err_mpi, req, req2, inflate_req, nproc
       use named_array_list, only: wna
-      use ppp,              only: piernik_Waitall
+      use ppp_mpi,          only: piernik_Waitall
 
       implicit none
 
@@ -461,7 +461,7 @@ contains
            &                      MPI_Irecv, MPI_Isend, MPI_Type_create_subarray, MPI_Type_commit, MPI_Type_free
       use mpisetup,         only: err_mpi, req, inflate_req
       use named_array_list, only: wna
-      use ppp,              only: piernik_Waitall
+      use ppp_mpi,          only: piernik_Waitall
 
       implicit none
 
@@ -773,7 +773,13 @@ contains
       use ppp,                   only: ppp_main
 #ifdef COSM_RAYS
       use initcosmicrays,        only: smallecr
+#ifdef COSM_RAY_ELECTRONS
+      use initcrspectrum,        only: smallcree, smallcren
+      use initcosmicrays,        only: iarr_cre_e, iarr_cre_n
+      use fluidindex,            only: iarr_all_crn
+#else  /* !COSM_RAY_ELECTRONS */
       use fluidindex,            only: iarr_all_crs
+#endif /* COSM_RAY_ELECTRONS */
 #endif /* COSM_RAYS */
 #ifdef GRAV
       use constants,             only: BND_OUTH, BND_OUTHD, I_ZERO
@@ -827,7 +833,13 @@ contains
                      l(dir,:) = cg%ijkse(dir,side)+ssign*ib
                      cg%u(:,l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = cg%u(:,r(xdim,LO):r(xdim,HI),r(ydim,LO):r(ydim,HI),r(zdim,LO):r(zdim,HI))
 #ifdef COSM_RAYS
+#ifdef COSM_RAY_ELECTRONS
+                     cg%u(iarr_all_crn,l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallecr
+                     cg%u(iarr_cre_n,  l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallcren   !< CRESP number density component
+                     cg%u(iarr_cre_e,  l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallcree   !< CRESP energy density component
+#else /* !COSM_RAY_ELECTRONS */
                      cg%u(iarr_all_crs,l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallecr
+#endif /* COSM_RAY_ELECTRONS */
 #endif /* COSM_RAYS */
                   enddo
                case (BND_OUTD)
@@ -838,7 +850,13 @@ contains
                      cg%u(:,l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = cg%u(:,r(xdim,LO):r(xdim,HI),r(ydim,LO):r(ydim,HI),r(zdim,LO):r(zdim,HI))
                      !> \deprecated BEWARE: use of uninitialized value on first call (a side effect of r1726)
 #ifdef COSM_RAYS
+#ifdef COSM_RAY_ELECTRONS
+                     cg%u(iarr_all_crn,l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallecr
+                     cg%u(iarr_cre_n,  l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallcren   !< CRESP number density component
+                     cg%u(iarr_cre_e,  l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallcree   !< CRESP energy density component
+#else /* !COSM_RAY_ELECTRONS */
                      cg%u(iarr_all_crs,l(xdim,LO):l(xdim,HI),l(ydim,LO):l(ydim,HI),l(zdim,LO):l(zdim,HI)) = smallecr
+#endif /* COSM_RAY_ELECTRONS */
 #endif /* COSM_RAYS */
                   enddo
                   l(dir,:) = cg%ijkse(dir,side) - [dom%nb, 1_INT4] +(dom%nb+1_INT4)*(side-LO)
@@ -957,7 +975,7 @@ contains
       use dataio_pub,            only: msg, warn, die
       use domain,                only: dom
       use fluidboundaries_funcs, only: user_fluidbnd
-      use global,                only: force_cc_mag
+      use global,                only: cc_mag
       use grid_cont,             only: grid_container
       use mpisetup,              only: master
       use named_array_list,      only: wna
@@ -1000,7 +1018,7 @@ contains
                case (BND_USER)
                   call user_fluidbnd(dir, side, cg, wn=wna%bi)
                case (BND_FC, BND_MPI_FC)
-                  if (.not. force_cc_mag) &
+                  if (.not. cc_mag) &
                        call die("[cg_list_bnd:bnd_b] fine-coarse interfaces not implemented yet for face-centered B field.")
                case (BND_COR)
                   if (dir == zdim) then
@@ -1029,7 +1047,7 @@ contains
 
          subroutine outflow_b(cg, dir, side)
 
-            ! use global,                only: force_cc_mag
+            ! use global,                only: cc_mag
             use grid_cont,             only: grid_container
 
             implicit none
@@ -1052,7 +1070,7 @@ contains
             !
             !   it = cg%ijkse(dir, side) - pm_one * i + (side - LO)
             !
-            ! when force_cc_mag is .false. in evaluation of dir-component of magnetic field
+            ! when cc_mag is .false. in evaluation of dir-component of magnetic field
             ! for more strict external boundary treatment.
 
             ! BEWARE: this kind of boundaries does not guarantee div(B) == 0 .

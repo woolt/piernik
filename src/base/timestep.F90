@@ -124,6 +124,10 @@ contains
       use dataio_pub,         only: printinfo
       use piernikdebug,       only: has_const_dt, constant_dt
 #endif /* DEBUG */
+#ifdef NBODY
+      use particle_timestep,    only: timestep_nbody
+#endif /* NBODY */
+
       implicit none
 
       real,              intent(inout) :: dt    !< the timestep
@@ -170,6 +174,10 @@ contains
       call piernik_MPI_Allreduce(dt,    pMIN)
       call piernik_MPI_Allreduce(c_all, pMAX)
 
+#ifdef NBODY
+      call timestep_nbody(dt)
+#endif /* NBODY */
+
       ! finally apply some sanity factors
       if (nstep < 1) then
          if (dt_initial > zero) then
@@ -214,10 +222,11 @@ contains
 !<
    subroutine check_cfl_violation(dt, flind)
 
+      use constants,      only: pLOR
       use dataio_pub,     only: warn
       use fluidtypes,     only: var_numbers
       use global,         only: cflcontrol, cfl_violated, dt_old, dn_negative, ei_negative, disallow_negatives, unwanted_negatives
-      use mpisetup,       only: piernik_MPI_Bcast, master
+      use mpisetup,       only: piernik_MPI_Allreduce, master
       use timestep_pub,   only: c_all, c_all_old
       use timestep_retry, only: reset_freezing_speed
 #ifdef COSM_RAYS
@@ -239,10 +248,10 @@ contains
 
       unwanted_negatives = .false.
       call time_step(checkdt, flind)
-      call piernik_MPI_Bcast(dn_negative)
-      call piernik_MPI_Bcast(ei_negative)
+      call piernik_MPI_Allreduce(dn_negative, pLOR)
+      call piernik_MPI_Allreduce(ei_negative, pLOR)
 #ifdef COSM_RAYS
-      call piernik_MPI_Bcast(cr_negative)
+      call piernik_MPI_Allreduce(cr_negative, pLOR)
       if (cr_negative .and. disallow_CRnegatives) then
          if (master) call warn('[timestep:check_cfl_violation] Possible violation of CFL: negatives in CRS')
          if (disallow_negatives) unwanted_negatives = .true.
@@ -277,6 +286,10 @@ contains
       use global,       only: cfl, cfl_max, cfl_violated, unwanted_negatives
       use mpisetup,     only: piernik_MPI_Bcast, master
       use timestep_pub, only: c_all, c_all_old, stepcfl
+#ifdef COSM_RAY_ELECTRONS
+      use cresp_grid,   only: cfl_cresp_violation
+      use initcrspectrum, only: cfl_cre
+#endif /* COSM_RAY_ELECTRONS */
 
       implicit none
 
@@ -289,6 +302,11 @@ contains
          if (stepcfl > cfl_max) then
             write(msg,'(a,g10.3)') "[timestep:cfl_warn] Possible violation of CFL: ",stepcfl
             cfl_violated = .true.
+#ifdef COSM_RAY_ELECTRONS
+         else if ( cfl_cresp_violation ) then
+            write(msg,'(a,g10.3)') "[timestep:cfl_warn] Possible violation of CFL @ CRESP module:", cfl_cre
+            cfl_violated = .true.
+#endif /* COSM_RAY_ELECTRONS */
          else if (stepcfl < 2*cfl - cfl_max) then
             write(msg,'(2(a,g10.3))') "[timestep:cfl_warn] Low CFL: ", stepcfl, " << ", cfl
          endif

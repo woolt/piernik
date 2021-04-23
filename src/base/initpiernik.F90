@@ -47,6 +47,9 @@ contains
       use cg_level_finest,       only: finest
       use cg_list_global,        only: all_cg
       use constants,             only: PIERNIK_INIT_MPI, PIERNIK_INIT_GLOBAL, PIERNIK_INIT_FLUIDS, PIERNIK_INIT_DOMAIN, PIERNIK_INIT_GRID, PIERNIK_INIT_IO_IC, PIERNIK_POST_IC, INCEPTIVE, tmr_fu, cbuff_len, PPP_PROB
+#ifdef COSM_RAY_ELECTRONS
+      use cresp_grid,            only: cresp_init_grid
+#endif /* COSM_RAY_ELECTRONS */
       use dataio,                only: init_dataio, init_dataio_parameters, write_data
       use dataio_pub,            only: nrestart, restarted_sim, wd_rd, par_file, tmp_log_file, msg, printio, printinfo, warn, require_problem_IC, problem_name, run_id, code_progress, log_wr, set_colors
       use decomposition,         only: init_decomposition
@@ -78,8 +81,15 @@ contains
 #ifdef GRAV
       use gravity,               only: init_grav, init_terms_grav, source_terms_grav
       use hydrostatic,           only: init_hydrostatic, cleanup_hydrostatic
-      use particle_pub,          only: init_particles
 #endif /* GRAV */
+#ifdef NBODY
+#ifdef GRAV
+      use particle_pub,          only: init_particles
+      use particle_utils,        only: global_count_all_particles
+#endif /* GRAV */
+      use particle_gravity,      only: update_particle_gravpot_and_acc
+      use particle_solvers,      only: update_particle_kinetic_energy
+#endif /* NBODY */
 #ifdef MULTIGRID
       use multigrid,             only: init_multigrid, init_multigrid_ext, multigrid_par
 #endif /* MULTIGRID */
@@ -181,7 +191,9 @@ contains
       call init_decomposition
 #ifdef GRAV
       call init_grav                         ! Has to be called before init_grid
+#ifdef NBODY
       call init_particles
+#endif /* NBODY */
       call init_hydrostatic
 #endif /* GRAV */
 #ifdef MULTIGRID
@@ -215,6 +227,10 @@ contains
 
       call init_dataio                       ! depends on units, fluids (through common_hdf5), fluidboundaries, arrays, grid and shear (through magboundaries::bnd_b or fluidboundaries::bnd_u) \todo split me
       ! Initial conditions are read here from a restart file if possible
+
+#ifdef COSM_RAY_ELECTRONS
+     call cresp_init_grid                    ! depends on cg
+#endif /* COSM_RAY_ELECTRONS */
 
 #ifdef GRAV
       if (restarted_sim) call source_terms_grav
@@ -264,6 +280,11 @@ contains
          if (master) call printinfo(msg)
          call ppp_main%stop(iter_label // "0", PPP_PROB)
 
+#ifdef NBODY
+         call update_particle_gravpot_and_acc
+         call update_particle_kinetic_energy
+#endif /* NBODY */
+
          do while (.not. finished)
             write(label, '(i8)') nit + 1
             call ppp_main%start(iter_label // adjustl(label), PPP_PROB)
@@ -295,15 +316,23 @@ contains
             call source_terms_grav  ! fix up gravitational potential when refiements did not converge
 #endif /* GRAV */
          endif
+#if defined(SELF_GRAV) && defined(NBODY)
+         !  Do we need to do anything particle-related to be called here?
+#endif /* SELF_GRAV && NBODY */
          if (associated(problem_post_IC)) call problem_post_IC
       endif
       call ppp_main%stop(ic_label)
 
       code_progress = PIERNIK_POST_IC
 
-      write(msg, '(a,3i8,a,i3)')"[initpiernik:init_piernik] Effective resolution is [", finest%level%l%n_d(:), " ] at level ", finest%level%l%id
+      write(msg, '(a,3i11,a,i3)')"[initpiernik:init_piernik] Effective resolution is [", finest%level%l%n_d(:), " ] at level ", finest%level%l%id
       !> \todo Do an MPI_Reduce in case the master process don't have any part of the globally finest level or ensure it is empty in such case
       if (master) call printinfo(msg)
+
+#if defined(GRAV) && defined(NBODY)
+      write(msg,'(a,i9)')"[initpiernik:init_piernik] Total number of particles is ", global_count_all_particles()
+      if (master) call printinfo(msg)
+#endif /* GRAV && NBODY */
 
 #ifdef VERBOSE
       call diagnose_arrays                   ! may depend on everything
