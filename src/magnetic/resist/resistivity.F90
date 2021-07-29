@@ -301,6 +301,7 @@ contains
       use global,           only: divB_0_method
       use mpisetup,         only: piernik_MPI_Allreduce, piernik_MPI_Bcast
       use named_array_list, only: qna
+      use types,            only: value
 #ifndef ISO
       use constants,        only: MINL
 #ifdef IONIZED
@@ -327,7 +328,11 @@ contains
          call compute_resist
          call leaves%get_extremum(qna%ind(eta_n), MAXL, etamax)
          call piernik_MPI_Bcast(etamax%val)
-         call leaves%get_extremum(qna%ind(wb_n), MAXL, cu2max)
+         if (eta1_active) then
+            call leaves%get_extremum(qna%ind(wb_n), MAXL, cu2max)
+         else
+            cu2max = value(0., 0., [0., 0., 0.], [0, 0, 0], 0_4)
+         endif
          call piernik_MPI_Bcast(cu2max%val)
       else
          etamax%val = eta_0
