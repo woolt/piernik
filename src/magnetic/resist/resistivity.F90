@@ -51,7 +51,7 @@ module resistivity
    real                                  :: d_eta_factor
    type(value)                           :: etamax, cu2max, deimin
    logical, save                         :: eta1_active = .true.           !< resistivity off-switcher while eta_1 == 0.0
-   character(len=dsetnamelen), parameter :: eta_n = "eta", jcu_n = "jcu2", eh_n = "eh"
+   character(len=dsetnamelen), parameter :: eta_n = "eta", jcu_n = "jcu2", dei_n = "dei"
 
 contains
 
@@ -148,7 +148,7 @@ contains
       call all_cg%reg_var(wcu_n)
       call all_cg%reg_var(eta_n)
       call all_cg%reg_var(jcu_n)
-      call all_cg%reg_var(eh_n)
+      call all_cg%reg_var(dei_n)
 
       cgl => leaves%first
       do while (associated(cgl))
@@ -181,7 +181,7 @@ contains
 
       type(cg_list_element),  pointer :: cgl
       type(grid_container),   pointer :: cg
-      real, dimension(:,:,:), pointer :: eta, jc2, eh
+      real, dimension(:,:,:), pointer :: eta, jc2
 
       if (.not.eta1_active) return
 !--- square current computing in cell corner step by step
@@ -193,7 +193,6 @@ contains
 
          eta => cg%q(qna%ind(eta_n))%arr
          jc2 => cg%q(qna%ind(jcu_n))%arr
-         eh  => cg%q(qna%ind(eh_n))%arr
 
          call compute_current_sq(cg)
 
@@ -346,7 +345,7 @@ contains
       type(grid_container),   pointer   :: cg
       real                              :: dt_eta, dt_eint
 #if !defined(ISO) && defined(IONIZED)
-      real, dimension(:,:,:),   pointer :: eta, jc2, eh
+      real, dimension(:,:,:),   pointer :: eta, jc2, dei
       real, dimension(:,:,:,:), pointer :: uu, bb
 #endif /* !ISO && IONIZED */
 
@@ -371,12 +370,12 @@ contains
             if (divB_0_method == DIVB_CT) then
                eta => cg%q(qna%ind(eta_n))%span(cg%ijkse)
                jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
-               eh => cg%q(qna%ind(eh_n))%span(cg%ijkse)
+               dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
                uu => cg%w(wna%fi)%span(cg%ijkse)
                bb => cg%W(wna%bi)%span(cg%ijkse)
-               eh = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
-                    emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * jc2 + small)
-               dt_eint = min(dt_eint, deint_max * abs(minval(eh)))
+               dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
+                     emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * jc2 + small)
+               dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
             endif
 #endif /* IONIZED */
 #endif /* !ISO */
@@ -390,7 +389,7 @@ contains
 #ifdef IONIZED
          call piernik_MPI_Allreduce(dt_eint, pMIN)
 #endif /* IONIZED */
-         call leaves%get_extremum(qna%ind(eh_n), MINL, deimin)
+         call leaves%get_extremum(qna%ind(dei_n), MINL, deimin)
          deimin%assoc = dt_eint
 #endif /* !ISO */
          etamax%assoc = dt_eta ; cu2max%assoc = min(dt_eta, dt_eint)
