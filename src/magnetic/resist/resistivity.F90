@@ -47,7 +47,7 @@ module resistivity
    real                                  :: j_crit                         !< critical value of current density
    real                                  :: jcrit2                         !< squared critical value of current density
    real                                  :: deint_max                      !< COMMENT ME
-   integer(kind=4)                       :: eta_scale                      !< COMMENT ME
+   real                                  :: eta_weight                     !< weight for smoothing eta; no smoothing if negative
    real                                  :: d_eta_factor
    type(value)                           :: etamax, cu2max, deimin
    logical, save                         :: eta1_active = .true.           !< resistivity off-switcher while eta_1 == 0.0
@@ -68,11 +68,11 @@ contains
 !! <table border="+1">
 !! <tr><td width="150pt"><b>parameter</b></td><td width="135pt"><b>default value</b></td><td width="200pt"><b>possible values</b></td><td width="315pt"> <b>description</b></td></tr>
 !! <tr><td>cfl_resist</td><td>0.4  </td><td>real value   </td><td>\copydoc resistivity::cfl_resist</td></tr>
-!! <tr><td>eta_0     </td><td>0.0  </td><td>real value   </td><td>\copydoc resistivity::eta_0    </td></tr>
-!! <tr><td>eta_1     </td><td>0.0  </td><td>real value   </td><td>\copydoc resistivity::eta_1    </td></tr>
-!! <tr><td>eta_scale </td><td>4    </td><td>integer value</td><td>\copydoc resistivity::eta_scale</td></tr>
-!! <tr><td>j_crit    </td><td>1.0e6</td><td>real value   </td><td>\copydoc resistivity::j_crit   </td></tr>
-!! <tr><td>deint_max </td><td>0.01 </td><td>real value   </td><td>\copydoc resistivity::deint_max</td></tr>
+!! <tr><td>eta_0     </td><td>0.0  </td><td>real value   </td><td>\copydoc resistivity::eta_0     </td></tr>
+!! <tr><td>eta_1     </td><td>0.0  </td><td>real value   </td><td>\copydoc resistivity::eta_1     </td></tr>
+!! <tr><td>eta_weight</td><td>4    </td><td>integer value</td><td>\copydoc resistivity::eta_weight</td></tr>
+!! <tr><td>j_crit    </td><td>1.0e6</td><td>real value   </td><td>\copydoc resistivity::j_crit    </td></tr>
+!! <tr><td>deint_max </td><td>0.01 </td><td>real value   </td><td>\copydoc resistivity::deint_max </td></tr>
 !! </table>
 !! The list is active while \b "RESISTIVE" is defined.
 !! \n \n
@@ -86,7 +86,7 @@ contains
       use dataio_pub,       only: die, code_progress, nh
       use domain,           only: dom
       use func,             only: operator(.notequals.)
-      use mpisetup,         only: rbuff, ibuff, master, slave, piernik_MPI_Bcast
+      use mpisetup,         only: rbuff, master, slave, piernik_MPI_Bcast
       use named_array_list, only: qna
       use types,            only: value
 
@@ -94,14 +94,14 @@ contains
 
       type(cg_list_element), pointer :: cgl
 
-      namelist /RESISTIVITY/ cfl_resist, eta_0, eta_1, eta_scale, j_crit, deint_max
+      namelist /RESISTIVITY/ cfl_resist, eta_0, eta_1, eta_weight, j_crit, deint_max
 
       if (code_progress < PIERNIK_INIT_GRID) call die("[resistivity:init_resistivity] grid not initialized.")
 
       cfl_resist = 0.4
       eta_0      = 0.0
       eta_1      = 0.0
-      eta_scale  = 4
+      eta_weight = 4.0
       j_crit     = 1.0e6
       deint_max  = 0.01
 
@@ -123,32 +123,27 @@ contains
          close(nh%lun)
          call nh%compare_namelist()
 
-         ibuff(1) = eta_scale
-
          rbuff(1) = cfl_resist
          rbuff(2) = eta_0
          rbuff(3) = eta_1
          rbuff(4) = j_crit
          rbuff(5) = deint_max
+         rbuff(6) = eta_weight
 
       endif
 
-      call piernik_MPI_Bcast(ibuff)
       call piernik_MPI_Bcast(rbuff)
 
       if (slave) then
-
-         eta_scale  = ibuff(1)
 
          cfl_resist = rbuff(1)
          eta_0      = rbuff(2)
          eta_1      = rbuff(3)
          j_crit     = rbuff(4)
          deint_max  = rbuff(5)
+         eta_weight = rbuff(6)
 
       endif
-
-      if (eta_scale < 0) call die("eta_scale must be greater or equal 0")
 
       call all_cg%reg_var(wcu_n)
       call all_cg%reg_var(eta_n)
@@ -167,7 +162,7 @@ contains
 
       if (eta1_active) then
          jcrit2 = j_crit**2
-         d_eta_factor = 1./(2.*dom%eff_dim + real(eta_scale))
+         d_eta_factor = 1./(2.*dom%eff_dim + eta_weight)
       endif
 
    end subroutine init_resistivity
@@ -176,7 +171,7 @@ contains
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: xdim, ydim, zdim, zero, LO, HI, GEO_XYZ
+      use constants,        only: zero, GEO_XYZ
       use dataio_pub,       only: die
       use domain,           only: dom
       use grid_cont,        only: grid_container
@@ -210,28 +205,12 @@ contains
             eta(:,:,:) = eta_0
          endwhere
 
-         eh = zero
-         if (dom%has_dir(xdim)) then
-            eh(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI)-1,:,:) = eh(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI)-1,:,:) + eta(cg%lhn(xdim,LO):cg%lhn(xdim,HI)-2,:,:) + eta(cg%lhn(xdim,LO)+2:cg%lhn(xdim,HI),:,:)
-            eh(cg%lhn(xdim,LO),:,:) = eh(cg%lhn(xdim,LO)+1,:,:) ; eh(cg%lhn(xdim,HI),:,:) = eh(cg%lhn(xdim,HI)-1,:,:)
-         endif
-         if (dom%has_dir(ydim)) then
-            eh(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI)-1,:) = eh(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI)-1,:) + eta(:,cg%lhn(ydim,LO):cg%lhn(ydim,HI)-2,:) + eta(:,cg%lhn(ydim,LO)+2:cg%lhn(ydim,HI),:)
-            eh(:,cg%lhn(ydim,LO),:) = eh(:,cg%lhn(ydim,LO)+1,:) ; eh(:,cg%lhn(ydim,HI),:) = eh(:,cg%lhn(ydim,HI)-1,:)
-         endif
-         if (dom%has_dir(zdim)) then
-            eh(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)-1) = eh(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)-1) + eta(:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-2) + eta(:,:,cg%lhn(zdim,LO)+2:cg%lhn(zdim,HI))
-            eh(:,:,cg%lhn(zdim,LO)) = eh(:,:,cg%lhn(zdim,LO)+1) ; eh(:,:,cg%lhn(zdim,HI)) = eh(:,:,cg%lhn(zdim,HI)-1)
-         endif
-         eh = (eh + real(eta_scale)*eta)*d_eta_factor
-
-         where (eta > eta_0) eta = eh
+         if (eta_weight < 0.) call smooth_eta(cg)
 
          cgl => cgl%nxt
       enddo
 
    end subroutine compute_resist
-
 
    subroutine compute_current_sq(cg)
 
@@ -303,6 +282,40 @@ contains
       endif
 
    end subroutine compute_current_sq
+
+   subroutine smooth_eta(cg)
+
+      use constants,        only: LO, HI, xdim, ydim, zdim, zero
+      use domain,           only: dom
+      use grid_cont,        only: grid_container
+      use named_array_list, only: qna
+
+      implicit none
+
+      type(grid_container),   pointer :: cg
+      real, dimension(:,:,:), pointer :: eta
+      real, dimension(cg%lhn(xdim,LO):cg%lhn(xdim,HI), cg%lhn(ydim,LO):cg%lhn(ydim,HI), cg%lhn(zdim,LO):cg%lhn(zdim,HI)) :: eh
+
+      eta => cg%q(qna%ind(eta_n))%arr
+
+      eh = zero
+      if (dom%has_dir(xdim)) then
+         eh(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI)-1,:,:) = eh(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI)-1,:,:) + eta(cg%lhn(xdim,LO):cg%lhn(xdim,HI)-2,:,:) + eta(cg%lhn(xdim,LO)+2:cg%lhn(xdim,HI),:,:)
+         eh(cg%lhn(xdim,LO),:,:) = eh(cg%lhn(xdim,LO)+1,:,:) ; eh(cg%lhn(xdim,HI),:,:) = eh(cg%lhn(xdim,HI)-1,:,:)
+      endif
+      if (dom%has_dir(ydim)) then
+         eh(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI)-1,:) = eh(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI)-1,:) + eta(:,cg%lhn(ydim,LO):cg%lhn(ydim,HI)-2,:) + eta(:,cg%lhn(ydim,LO)+2:cg%lhn(ydim,HI),:)
+         eh(:,cg%lhn(ydim,LO),:) = eh(:,cg%lhn(ydim,LO)+1,:) ; eh(:,cg%lhn(ydim,HI),:) = eh(:,cg%lhn(ydim,HI)-1,:)
+      endif
+      if (dom%has_dir(zdim)) then
+         eh(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)-1) = eh(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)-1) + eta(:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-2) + eta(:,:,cg%lhn(zdim,LO)+2:cg%lhn(zdim,HI))
+         eh(:,:,cg%lhn(zdim,LO)) = eh(:,:,cg%lhn(zdim,LO)+1) ; eh(:,:,cg%lhn(zdim,HI)) = eh(:,:,cg%lhn(zdim,HI)-1)
+      endif
+      eh = (eh + eta_weight * eta) * d_eta_factor
+
+      where (eta > eta_0) eta = eh
+
+   end subroutine smooth_eta
 
 !-----------------------------------------------------------------------
 
