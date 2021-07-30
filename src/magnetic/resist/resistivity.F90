@@ -82,13 +82,16 @@ contains
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
       use cg_list_global,   only: all_cg
-      use constants,        only: PIERNIK_INIT_GRID, wcu_n, zero
+      use constants,        only: PIERNIK_INIT_GRID, GEO_XYZ, wcu_n, zero
       use dataio_pub,       only: die, code_progress, nh
       use domain,           only: dom
       use func,             only: operator(.notequals.)
       use mpisetup,         only: rbuff, master, slave, piernik_MPI_Bcast
       use named_array_list, only: qna
       use types,            only: value
+#if !defined(IONIZED) && defined(ISO)
+      use dataio_pub,       only: warn
+#endif /* !IONIZED || ISO */
 
       implicit none
 
@@ -97,6 +100,7 @@ contains
       namelist /RESISTIVITY/ cfl_resist, eta_0, eta_1, eta_weight, j_crit, deint_max
 
       if (code_progress < PIERNIK_INIT_GRID) call die("[resistivity:init_resistivity] grid not initialized.")
+      if (dom%geometry_type /= GEO_XYZ)      call die("[resistivity:init_resistivity] Unsupported geometry")
 
       cfl_resist = 0.4
       eta_0      = 0.0
@@ -147,8 +151,10 @@ contains
 
       call all_cg%reg_var(wcu_n)
       call all_cg%reg_var(eta_n)
+#if !defined(ISO) && defined(IONIZED)
       call all_cg%reg_var(jcu_n)
       call all_cg%reg_var(dei_n)
+#endif /* !ISO && IONIZED */
 
       cgl => leaves%first
       do while (associated(cgl))
@@ -156,24 +162,26 @@ contains
          cgl => cgl%nxt
       enddo
       etamax = value(eta_0, 0., [0., 0., 0.], [0, 0, 0], 0_4)
-      cu2max = value(   0., 0., [0., 0., 0.], [0, 0, 0], 0_4)
 
       eta1_active = (eta_1 .notequals. zero)
 
       if (eta1_active) then
          jcrit2 = j_crit**2
          d_eta_factor = 1./(2.*dom%eff_dim + eta_weight)
+#if !defined(IONIZED) && defined(ISO)
+         call warn("[resistivity:init_resistivity] eta_1 is set, but IONIZED gas is not included or ISO is set.")
+         eta1_active = .false.
+#endif /* !IONIZED || ISO */
       endif
 
    end subroutine init_resistivity
 
+#if !defined(ISO) && defined(IONIZED)
    subroutine compute_resist
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: zero, GEO_XYZ
-      use dataio_pub,       only: die
-      use domain,           only: dom
+      use constants,        only: zero
       use grid_cont,        only: grid_container
       use named_array_list, only: qna
 
@@ -183,34 +191,33 @@ contains
       type(grid_container),   pointer :: cg
       real, dimension(:,:,:), pointer :: eta, jc2
 
-      if (.not.eta1_active) return
-!--- square current computing in cell corner step by step
-      if (dom%geometry_type /= GEO_XYZ) call die("[resistivity:compute_resist] Unsupported geometry")
-
       cgl => leaves%first
       do while (associated(cgl))
          cg => cgl%cg
 
-         eta => cg%q(qna%ind(eta_n))%arr
-         jc2 => cg%q(qna%ind(jcu_n))%arr
-
          call compute_current_sq(cg)
 
-!        eta(:,:,:) = eta_0 + eta_1 * sqrt( max(0.0,jc2(:,:,:)- jcrit2 ))
-!        the above may cause FPE because compiler may transform it to max(0.0, sqrt(jc2(:,:,:)- jcrit2))
-         where (jc2(:,:,:) - jcrit2 > zero)
-            eta(:,:,:) = eta_0 + eta_1 * sqrt(jc2(:,:,:) - jcrit2)
-         elsewhere
-            eta(:,:,:) = eta_0
-         endwhere
+         if (eta1_active) then
+            eta => cg%q(qna%ind(eta_n))%arr
+            jc2 => cg%q(qna%ind(jcu_n))%arr
 
-         if (eta_weight < 0.) call smooth_eta(cg)
+!           eta(:,:,:) = eta_0 + eta_1 * sqrt( max(0.0,jc2(:,:,:) - jcrit2 ))
+!           the above may cause FPE because compiler may transform it to max(0.0, sqrt(jc2(:,:,:)- jcrit2))
+            where (jc2(:,:,:) - jcrit2 > zero)
+               eta(:,:,:) = eta_0 + eta_1 * sqrt(jc2(:,:,:) - jcrit2)
+            elsewhere
+               eta(:,:,:) = eta_0
+            endwhere
+
+            if (eta_weight < 0.) call smooth_eta(cg)
+         endif
 
          cgl => cgl%nxt
       enddo
 
    end subroutine compute_resist
 
+!> \brief square current computing in cell corner step by step
    subroutine compute_current_sq(cg)
 
       use constants,        only: LO, HI, oneq, xdim, ydim, zdim
@@ -315,6 +322,7 @@ contains
       where (eta > eta_0) eta = eh
 
    end subroutine smooth_eta
+#endif /* !ISO && IONIZED */
 
 !-----------------------------------------------------------------------
 
@@ -322,21 +330,17 @@ contains
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: big, zero, pMIN, MAXL, DIVB_CT
+      use constants,        only: big, zero, pMIN, DIVB_CT
       use grid_cont,        only: grid_container
       use func,             only: operator(.notequals.)
       use global,           only: divB_0_method
       use mpisetup,         only: piernik_MPI_Allreduce, piernik_MPI_Bcast
-      use named_array_list, only: qna
-#ifndef ISO
-      use constants,        only: MINL
-#ifdef IONIZED
-      use constants,        only: small, xdim, ydim, zdim
+#if !defined(ISO) && defined(IONIZED)
+      use constants,        only: MAXL, MINL, small, xdim, ydim, zdim
       use fluidindex,       only: flind
       use func,             only: ekin, emag
-      use named_array_list, only: wna
-#endif /* IONIZED */
-#endif /* !ISO */
+      use named_array_list, only: qna, wna
+#endif /* !ISO && IONIZED */
 
       implicit none
 
@@ -350,6 +354,7 @@ contains
 #endif /* !ISO && IONIZED */
 
       dt_eta = big ; dt_eint = big
+#if !defined(ISO) && defined(IONIZED)
       if (divB_0_method == DIVB_CT) then
          call compute_resist
          if (eta1_active) then
@@ -359,40 +364,38 @@ contains
             call piernik_MPI_Bcast(cu2max%val)
          endif
       endif
+#endif /* !ISO && IONIZED */
 
       if (etamax%val .notequals. zero) then
          cgl => leaves%first
          do while (associated(cgl))
             cg => cgl%cg
             dt_eta = min(dt_eta, cfl_resist * cg%dxmn2 / (2. * etamax%val))
-#ifndef ISO
-#ifdef IONIZED
+#if !defined(ISO) && defined(IONIZED)
             if (divB_0_method == DIVB_CT) then
                eta => cg%q(qna%ind(eta_n))%span(cg%ijkse)
                jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
                dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
                uu => cg%w(wna%fi)%span(cg%ijkse)
-               bb => cg%W(wna%bi)%span(cg%ijkse)
+               bb => cg%w(wna%bi)%span(cg%ijkse)
                dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
                      emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * jc2 + small)
                dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
             endif
-#endif /* IONIZED */
-#endif /* !ISO */
+#endif /* !ISO && IONIZED */
             cgl => cgl%nxt
          enddo
       endif
 
       call piernik_MPI_Allreduce(dt_eta, pMIN)
       if (divB_0_method == DIVB_CT) then
-#ifndef ISO
-#ifdef IONIZED
+#if !defined(ISO) && defined(IONIZED)
          call piernik_MPI_Allreduce(dt_eint, pMIN)
-#endif /* IONIZED */
          call leaves%get_extremum(qna%ind(dei_n), MINL, deimin)
          deimin%assoc = dt_eint
-#endif /* !ISO */
-         etamax%assoc = dt_eta ; cu2max%assoc = min(dt_eta, dt_eint)
+         cu2max%assoc = min(dt_eta, dt_eint)
+#endif /* !ISO && IONIZED */
+         etamax%assoc = dt_eta
       endif
 
       dt = min(dt, dt_eta, dt_eint)
@@ -481,7 +484,9 @@ contains
       n2 = I_ONE + mod(sdir+I_ONE, ndims)
       etadir = sum([xdim,ydim,zdim]) - ibdir - sdir
 
+#if !defined(ISO) && defined(IONIZED)
       call compute_resist
+#endif /* !ISO && IONIZED */
 
       cgl => leaves%first
       do while (associated(cgl))

@@ -1560,10 +1560,10 @@ contains
 #endif /* !ISO */
 #endif /* MAGNETIC */
 #ifdef RESISTIVE
-      use resistivity,        only: etamax, cu2max, eta1_active
-#ifndef ISO
-      use resistivity,        only: deimin
-#endif /* !ISO */
+      use resistivity,        only: etamax, eta1_active
+#if !defined(ISO) && defined(IONIZED)
+      use resistivity,        only: deimin, cu2max
+#endif /* !ISO && IONIZED */
 #endif /* RESISTIVE */
 #ifdef VARIABLE_GP
       use constants,          only: gpot_n
@@ -1816,10 +1816,10 @@ contains
             if (eta1_active) then
                id = "RES"
                call cmnlog_l(fmt_dtloc, 'max(eta)    ', id, etamax)
+#if !defined(ISO) && defined(IONIZED)
                call cmnlog_l(fmt_dtloc, 'max(cu2)    ', id, cu2max)
-#ifndef ISO
                call cmnlog_l(fmt_dtloc, 'min(dei)    ', id, deimin)
-#endif /* !ISO */
+#endif /* !ISO && IONIZED */
             endif
 #endif /* RESISTIVE */
 #ifdef VARIABLE_GP
