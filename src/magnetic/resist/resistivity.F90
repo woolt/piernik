@@ -45,13 +45,13 @@ module resistivity
    real                                  :: eta_0                          !< uniform resistivity
    real                                  :: eta_1                          !< anomalous resistivity
    real                                  :: j_crit                         !< critical value of current density
-   real                                  :: jc2                            !< squared critical value of current density
+   real                                  :: jcrit2                         !< squared critical value of current density
    real                                  :: deint_max                      !< COMMENT ME
    integer(kind=4)                       :: eta_scale                      !< COMMENT ME
    real                                  :: d_eta_factor
    type(value)                           :: etamax, cu2max, deimin
    logical, save                         :: eta1_active = .true.           !< resistivity off-switcher while eta_1 == 0.0
-   character(len=dsetnamelen), parameter :: eta_n = "eta", wb_n = "wb", eh_n = "eh", db_n = "db"
+   character(len=dsetnamelen), parameter :: eta_n = "eta", jcu_n = "jcu2", eh_n = "eh"
 
 contains
 
@@ -152,7 +152,7 @@ contains
 
       call all_cg%reg_var(wcu_n)
       call all_cg%reg_var(eta_n)
-      call all_cg%reg_var(wb_n)
+      call all_cg%reg_var(jcu_n)
       call all_cg%reg_var(eh_n)
 
       cgl => leaves%first
@@ -166,9 +166,7 @@ contains
       eta1_active = (eta_1 .notequals. zero)
 
       if (eta1_active) then
-         call all_cg%reg_var(db_n)
-
-         jc2 = j_crit**2
+         jcrit2 = j_crit**2
          d_eta_factor = 1./(2.*dom%eff_dim + real(eta_scale))
       endif
 
@@ -178,7 +176,7 @@ contains
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: xdim, ydim, zdim, zero, oneq, LO, HI, GEO_XYZ
+      use constants,        only: xdim, ydim, zdim, zero, LO, HI, GEO_XYZ
       use dataio_pub,       only: die
       use domain,           only: dom
       use grid_cont,        only: grid_container
@@ -188,7 +186,7 @@ contains
 
       type(cg_list_element),  pointer :: cgl
       type(grid_container),   pointer :: cg
-      real, dimension(:,:,:), pointer :: eta, db, wb, eh
+      real, dimension(:,:,:), pointer :: eta, jc2, eh
 
       if (.not.eta1_active) return
 !--- square current computing in cell corner step by step
@@ -199,69 +197,15 @@ contains
          cg => cgl%cg
 
          eta => cg%q(qna%ind(eta_n))%arr
-         db  => cg%q(qna%ind(db_n))%arr
-         wb  => cg%q(qna%ind(wb_n))%arr
+         jc2 => cg%q(qna%ind(jcu_n))%arr
          eh  => cg%q(qna%ind(eh_n))%arr
 
-!--- current_z **2
-         if (dom%has_dir(xdim)) then
-            eh(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) = (cg%b(ydim,cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) - cg%b(ydim,cg%lhn(xdim,LO):cg%lhn(xdim,HI)-1,:,:)) * cg%idl(xdim)
-            eh(cg%lhn(xdim,LO),:,:) = eh(cg%lhn(xdim,LO)+1,:,:)
-         else ; eh = 0.0 ; endif
-         if (dom%has_dir(ydim)) then
-            db(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) = (cg%b(xdim,:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) - cg%b(xdim,:,cg%lhn(ydim,LO):cg%lhn(ydim,HI)-1,:)) * cg%idl(ydim)
-            db(:,cg%lhn(ydim,LO),:) = db(:,cg%lhn(ydim,LO)+1,:)
-            eh = eh - db
-         endif
+         call compute_current_sq(cg)
 
-         if (dom%has_dir(zdim)) then
-            wb(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) =                                             oneq*(eh(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) + eh(:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-1))**2
-            wb(:,:,cg%lhn(zdim,LO)) = wb(:,:,cg%lhn(zdim,LO)+1)
-         else
-            wb = eh**2
-         endif
-
-!--- current_x **2
-         if (dom%has_dir(ydim)) then
-            eh(:,cg%lhn(ydim,LO)+1:cg%lhn(xdim,HI),:) = (cg%b(zdim,:,cg%lhn(ydim,LO)+1:cg%lhn(xdim,HI),:) - cg%b(zdim,:,cg%lhn(ydim,LO):cg%lhn(xdim,HI)-1,:)) * cg%idl(ydim)
-            eh(:,cg%lhn(ydim,LO),:) = eh(:,cg%lhn(ydim,LO)+1,:)
-         else ; eh = 0.0 ; endif
-         if (dom%has_dir(zdim)) then
-            db(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) = (cg%b(ydim,:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) - cg%b(ydim,:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-1)) * cg%idl(zdim)
-            db(:,:,cg%lhn(zdim,LO)) = db(:,:,cg%lhn(zdim,LO)+1)
-            eh = eh - db
-         endif
-
-         if (dom%has_dir(xdim)) then
-            wb(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) = wb(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) + oneq*(eh(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) + eh(cg%lhn(xdim,LO):cg%lhn(xdim,HI)-1,:,:))**2
-            wb(cg%lhn(xdim,LO),:,:) = wb(cg%lhn(xdim,LO)+1,:,:)
-         else
-            wb = wb + eh**2
-         endif
-
-!--- current_y **2
-         if (dom%has_dir(zdim)) then
-            eh(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) = (cg%b(xdim,:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) - cg%b(xdim,:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-1)) * cg%idl(zdim)
-            eh(:,:,cg%lhn(zdim,LO)) = eh(:,:,cg%lhn(zdim,LO)+1)
-         else ; eh = 0.0 ; endif
-         if (dom%has_dir(xdim)) then
-            db(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) = (cg%b(zdim,cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) - cg%b(zdim,cg%lhn(xdim,LO):cg%lhn(xdim,HI)-1,:,:)) * cg%idl(xdim)
-            db(cg%lhn(xdim,LO),:,:) = db(cg%lhn(xdim,LO)+1,:,:)
-            eh = eh - db
-         endif
-
-         if (dom%has_dir(ydim)) then
-            wb(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) = wb(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) + oneq*(eh(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) + eh(:,cg%lhn(ydim,LO):cg%lhn(ydim,HI)-1,:))**2
-            wb(:,cg%lhn(ydim,LO),:) = wb(:,cg%lhn(ydim,LO)+1,:)
-         else
-            wb = wb + eh**2
-         endif
-
-
-!        eta(:,:,:) = eta_0 + eta_1 * sqrt( max(0.0,wb(:,:,:)- jc2 ))
-!        the above may cause FPE because compiler may transform it to max(0.0, sqrt(wb(:,:,:)- jc2 ))
-         where (wb(:,:,:) - jc2 > zero)
-            eta(:,:,:) = eta_0 + eta_1 * sqrt(wb(:,:,:)- jc2)
+!        eta(:,:,:) = eta_0 + eta_1 * sqrt( max(0.0,jc2(:,:,:)- jcrit2 ))
+!        the above may cause FPE because compiler may transform it to max(0.0, sqrt(jc2(:,:,:)- jcrit2))
+         where (jc2(:,:,:) - jcrit2 > zero)
+            eta(:,:,:) = eta_0 + eta_1 * sqrt(jc2(:,:,:) - jcrit2)
          elsewhere
             eta(:,:,:) = eta_0
          endwhere
@@ -287,6 +231,78 @@ contains
       enddo
 
    end subroutine compute_resist
+
+
+   subroutine compute_current_sq(cg)
+
+      use constants,        only: LO, HI, oneq, xdim, ydim, zdim
+      use domain,           only: dom
+      use grid_cont,        only: grid_container
+      use named_array_list, only: qna
+
+      implicit none
+
+      type(grid_container),   pointer :: cg
+      real, dimension(:,:,:), pointer :: jc2
+      real, dimension(cg%lhn(xdim,LO):cg%lhn(xdim,HI), cg%lhn(ydim,LO):cg%lhn(ydim,HI), cg%lhn(zdim,LO):cg%lhn(zdim,HI)) :: db, rotb
+
+      jc2 => cg%q(qna%ind(jcu_n))%arr
+
+!--- current_z **2
+      if (dom%has_dir(xdim)) then
+         rotb(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) = (cg%b(ydim,cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) - cg%b(ydim,cg%lhn(xdim,LO):cg%lhn(xdim,HI)-1,:,:)) * cg%idl(xdim)
+         rotb(cg%lhn(xdim,LO),:,:) = rotb(cg%lhn(xdim,LO)+1,:,:)
+      else ; rotb = 0.0 ; endif
+      if (dom%has_dir(ydim)) then
+         db(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) = (cg%b(xdim,:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) - cg%b(xdim,:,cg%lhn(ydim,LO):cg%lhn(ydim,HI)-1,:)) * cg%idl(ydim)
+         db(:,cg%lhn(ydim,LO),:) = db(:,cg%lhn(ydim,LO)+1,:)
+         rotb = rotb - db
+      endif
+
+      if (dom%has_dir(zdim)) then
+         jc2(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) =                                              oneq*(rotb(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) + rotb(:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-1))**2
+         jc2(:,:,cg%lhn(zdim,LO)) = jc2(:,:,cg%lhn(zdim,LO)+1)
+      else
+         jc2 = rotb**2
+      endif
+
+!--- current_x **2
+      if (dom%has_dir(ydim)) then
+         rotb(:,cg%lhn(ydim,LO)+1:cg%lhn(xdim,HI),:) = (cg%b(zdim,:,cg%lhn(ydim,LO)+1:cg%lhn(xdim,HI),:) - cg%b(zdim,:,cg%lhn(ydim,LO):cg%lhn(xdim,HI)-1,:)) * cg%idl(ydim)
+         rotb(:,cg%lhn(ydim,LO),:) = rotb(:,cg%lhn(ydim,LO)+1,:)
+      else ; rotb = 0.0 ; endif
+      if (dom%has_dir(zdim)) then
+         db(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) = (cg%b(ydim,:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) - cg%b(ydim,:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-1)) * cg%idl(zdim)
+         db(:,:,cg%lhn(zdim,LO)) = db(:,:,cg%lhn(zdim,LO)+1)
+         rotb = rotb - db
+      endif
+
+      if (dom%has_dir(xdim)) then
+         jc2(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) = jc2(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) + oneq*(rotb(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) + rotb(cg%lhn(xdim,LO):cg%lhn(xdim,HI)-1,:,:))**2
+         jc2(cg%lhn(xdim,LO),:,:) = jc2(cg%lhn(xdim,LO)+1,:,:)
+      else
+         jc2 = jc2 + rotb**2
+      endif
+
+!--- current_y **2
+      if (dom%has_dir(zdim)) then
+         rotb(:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) = (cg%b(xdim,:,:,cg%lhn(zdim,LO)+1:cg%lhn(zdim,HI)) - cg%b(xdim,:,:,cg%lhn(zdim,LO):cg%lhn(zdim,HI)-1)) * cg%idl(zdim)
+         rotb(:,:,cg%lhn(zdim,LO)) = rotb(:,:,cg%lhn(zdim,LO)+1)
+      else ; rotb = 0.0 ; endif
+      if (dom%has_dir(xdim)) then
+         db(cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) = (cg%b(zdim,cg%lhn(xdim,LO)+1:cg%lhn(xdim,HI),:,:) - cg%b(zdim,cg%lhn(xdim,LO):cg%lhn(xdim,HI)-1,:,:)) * cg%idl(xdim)
+         db(cg%lhn(xdim,LO),:,:) = db(cg%lhn(xdim,LO)+1,:,:)
+         rotb = rotb - db
+      endif
+
+      if (dom%has_dir(ydim)) then
+         jc2(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) = jc2(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) + oneq*(rotb(:,cg%lhn(ydim,LO)+1:cg%lhn(ydim,HI),:) + rotb(:,cg%lhn(ydim,LO):cg%lhn(ydim,HI)-1,:))**2
+         jc2(:,cg%lhn(ydim,LO),:) = jc2(:,cg%lhn(ydim,LO)+1,:)
+      else
+         jc2 = jc2 + rotb**2
+      endif
+
+   end subroutine compute_current_sq
 
 !-----------------------------------------------------------------------
 
@@ -317,7 +333,7 @@ contains
       type(grid_container),   pointer   :: cg
       real                              :: dt_eta, dt_eint
 #if !defined(ISO) && defined(IONIZED)
-      real, dimension(:,:,:),   pointer :: eta, wb, eh
+      real, dimension(:,:,:),   pointer :: eta, jc2, eh
       real, dimension(:,:,:,:), pointer :: uu, bb
 #endif /* !ISO && IONIZED */
 
@@ -327,7 +343,7 @@ contains
          if (eta1_active) then
             call leaves%get_extremum(qna%ind(eta_n), MAXL, etamax)
             call piernik_MPI_Bcast(etamax%val)
-            call leaves%get_extremum(qna%ind(wb_n), MAXL, cu2max)
+            call leaves%get_extremum(qna%ind(jcu_n), MAXL, cu2max)
             call piernik_MPI_Bcast(cu2max%val)
          endif
       endif
@@ -341,12 +357,12 @@ contains
 #ifdef IONIZED
             if (divB_0_method == DIVB_CT) then
                eta => cg%q(qna%ind(eta_n))%span(cg%ijkse)
-               wb => cg%q(qna%ind(wb_n))%span(cg%ijkse)
+               jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
                eh => cg%q(qna%ind(eh_n))%span(cg%ijkse)
                uu => cg%w(wna%fi)%span(cg%ijkse)
                bb => cg%W(wna%bi)%span(cg%ijkse)
                eh = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
-                    emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * wb + small)
+                    emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * jc2 + small)
                dt_eint = min(dt_eint, deint_max * abs(minval(eh)))
             endif
 #endif /* IONIZED */
