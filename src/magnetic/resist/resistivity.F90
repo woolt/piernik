@@ -498,7 +498,7 @@ contains
       etadir = sum([xdim,ydim,zdim]) - ibdir - sdir
 
 #if !defined(ISO) && defined(IONIZED)
-      call compute_resist
+      if (eta1_active) call compute_resist
 #endif /* !ISO && IONIZED */
 
       wcu_i = qna%ind(wcu_n)
