@@ -34,12 +34,11 @@
 module resistivity
 ! pulled by RESISTIVE
    use constants, only: dsetnamelen
-   use types,     only: value
 
    implicit none
 
    private
-   public  :: init_resistivity, timestep_resist, cleanup_resistivity, etamax, diffuseb, cu2max, deimin, eta1_active, diffuse_mag
+   public  :: init_resistivity, timestep_resist, cleanup_resistivity, diffuseb, eta1_active, diffuse_mag, dt_eta, dt_eint, eta_0, eta_n, jcu_n, dei_n
 
    real                                  :: cfl_resist                     !< CFL factor for resistivity effect
    real                                  :: eta_0                          !< uniform resistivity
@@ -49,7 +48,7 @@ module resistivity
    real                                  :: deint_max                      !< COMMENT ME
    real                                  :: eta_weight                     !< weight for smoothing eta; no smoothing if negative
    real                                  :: d_eta_factor
-   type(value)                           :: etamax, cu2max, deimin
+   real                                  :: dt_eta, dt_eint
    logical                               :: eta1_active                    !< resistivity off-switcher while eta_1 == 0.0
    character(len=dsetnamelen), parameter :: eta_n = "eta", jcu_n = "jcu2", dei_n = "dei"
 
@@ -88,7 +87,6 @@ contains
       use func,             only: operator(.notequals.)
       use mpisetup,         only: rbuff, master, slave, piernik_MPI_Bcast
       use named_array_list, only: qna
-      use types,            only: value
 #if !defined(IONIZED) || defined(ISO)
       use dataio_pub,       only: warn
 #endif /* !IONIZED || ISO */
@@ -159,8 +157,6 @@ contains
          if (eta1_active) call warn("[resistivity:init_resistivity] eta_1 is set, but IONIZED gas is not included or ISO is set.")
          eta1_active = .false.
 #endif /* !IONIZED || ISO */
-
-      etamax = value(eta_0, 0., [0., 0., 0.], [0, 0, 0], 0_4)
 
       if (eta1_active) then
          call all_cg%reg_var(eta_n)
@@ -330,77 +326,63 @@ contains
 
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
-      use constants,        only: big, zero, pMIN, DIVB_CT
+      use constants,        only: big, zero
       use grid_cont,        only: grid_container
-      use func,             only: operator(.notequals.)
-      use global,           only: divB_0_method
-      use mpisetup,         only: piernik_MPI_Allreduce, piernik_MPI_Bcast
+      use named_array_list, only: qna
 #if !defined(ISO) && defined(IONIZED)
-      use constants,        only: MAXL, MINL, small, xdim, ydim, zdim
+      use constants,        only: DIVB_CT, small, xdim, ydim, zdim
       use fluidindex,       only: flind
       use func,             only: ekin, emag
-      use named_array_list, only: qna, wna
+      use global,           only: divB_0_method
+      use named_array_list, only: wna
 #endif /* !ISO && IONIZED */
 
       implicit none
 
       real, intent(inout)               :: dt
-      type(cg_list_element),  pointer   :: cgl
-      type(grid_container),   pointer   :: cg
-      real                              :: dt_eta, dt_eint
+      real                              :: max_eta
+      type(cg_list_element),    pointer :: cgl
+      type(grid_container),     pointer :: cg
 #if !defined(ISO) && defined(IONIZED)
       real, dimension(:,:,:),   pointer :: jc2, dei
       real, dimension(:,:,:,:), pointer :: uu, bb
 #endif /* !ISO && IONIZED */
 
       dt_eta = big ; dt_eint = big
+
 #if !defined(ISO) && defined(IONIZED)
-      if (divB_0_method == DIVB_CT) then
-         call compute_resist
+      if (divB_0_method == DIVB_CT) call compute_resist
+#endif /* !ISO && IONIZED */
+
+      cgl => leaves%first
+      do while (associated(cgl))
+         cg => cgl%cg
+
          if (eta1_active) then
-            call leaves%get_extremum(qna%ind(eta_n), MAXL, etamax)
-            call piernik_MPI_Bcast(etamax%val)
-            call leaves%get_extremum(qna%ind(jcu_n), MAXL, cu2max)
-            call piernik_MPI_Bcast(cu2max%val)
+            max_eta = maxval(cg%q(qna%ind(eta_n))%span(cg%ijkse))
+         else
+            max_eta = eta_0
          endif
-      endif
-#endif /* !ISO && IONIZED */
+         if (max_eta > zero) dt_eta = min(dt_eta, cfl_resist * cg%dxmn2 / (2. * max_eta))
 
-      if (etamax%val .notequals. zero) then
-         cgl => leaves%first
-         do while (associated(cgl))
-            cg => cgl%cg
-            dt_eta = min(dt_eta, cfl_resist * cg%dxmn2 / (2. * etamax%val))
 #if !defined(ISO) && defined(IONIZED)
-            if (divB_0_method == DIVB_CT) then
-               uu => cg%w(wna%fi)%span(cg%ijkse)
-               bb => cg%w(wna%bi)%span(cg%ijkse)
-               dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
-               jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
-               if (eta1_active) then
-                  dei = jc2 * cg%q(qna%ind(eta_n))%span(cg%ijkse) + small
-               else
-                  dei = jc2 * eta_0 + small
-               endif
-               dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
-                     emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:))) / dei
-               dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
+         if (divB_0_method == DIVB_CT) then
+            uu => cg%w(wna%fi)%span(cg%ijkse)
+            bb => cg%w(wna%bi)%span(cg%ijkse)
+            dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
+            jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
+            if (eta1_active) then
+               dei = jc2 * cg%q(qna%ind(eta_n))%span(cg%ijkse) + small
+            else
+               dei = jc2 * eta_0 + small
             endif
+            dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
+                  emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:))) / dei
+            dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
+         endif
 #endif /* !ISO && IONIZED */
-            cgl => cgl%nxt
-         enddo
-      endif
-
-      call piernik_MPI_Allreduce(dt_eta, pMIN)
-      if (divB_0_method == DIVB_CT) then
-#if !defined(ISO) && defined(IONIZED)
-         call piernik_MPI_Allreduce(dt_eint, pMIN)
-         call leaves%get_extremum(qna%ind(dei_n), MINL, deimin)
-         deimin%assoc = dt_eint
-         cu2max%assoc = min(dt_eta, dt_eint)
-#endif /* !ISO && IONIZED */
-         etamax%assoc = dt_eta
-      endif
+         cgl => cgl%nxt
+      enddo
 
       dt = min(dt, dt_eta, dt_eint)
 

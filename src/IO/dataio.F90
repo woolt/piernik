@@ -1560,9 +1560,9 @@ contains
 #endif /* !ISO */
 #endif /* MAGNETIC */
 #ifdef RESISTIVE
-      use resistivity,        only: etamax, eta1_active
+      use resistivity,        only: eta_0, eta1_active, dt_eta, eta_n
 #if !defined(ISO) && defined(IONIZED)
-      use resistivity,        only: deimin, cu2max
+      use resistivity,        only: dt_eint, jcu_n, dei_n
 #endif /* !ISO && IONIZED */
 #endif /* RESISTIVE */
 #ifdef VARIABLE_GP
@@ -1583,6 +1583,12 @@ contains
       type(value)                     :: drag
 #ifdef MAGNETIC
       type(value)                     :: b_min, b_max, divb_max, vai_max, cfi_max, ch_max
+#ifdef RESISTIVE
+      type(value)                     :: etamax
+#if !defined(ISO) && defined(IONIZED)
+      type(value)                     :: cu2max, deimin
+#endif /* !ISO && IONIZED */
+#endif /* RESISTIVE */
 #endif /* MAGNETIC */
 #ifdef COSM_RAYS
       type(value)                     :: encr_min, encr_max
@@ -1668,6 +1674,23 @@ contains
 
       call map_chspeed
       call leaves%get_extremum(qna%wai, MAXL, ch_max)
+
+#ifdef RESISTIVE
+      if (eta1_active) then
+         call leaves%get_extremum(qna%ind(eta_n), MAXL, etamax)
+      else
+         etamax = value(eta_0, 0., [0., 0., 0.], [0, 0, 0], 0_4)
+      endif
+      etamax%assoc = dt_eta
+      call piernik_MPI_Allreduce(etamax%assoc, pMIN)
+#if !defined(ISO) && defined(IONIZED)
+      call leaves%get_extremum(qna%ind(dei_n), MINL, deimin)
+      deimin%assoc = dt_eint
+      call piernik_MPI_Allreduce(deimin%assoc, pMIN)
+      call leaves%get_extremum(qna%ind(jcu_n), MAXL, cu2max)
+      cu2max%assoc = min(etamax%assoc, deimin%assoc)
+#endif /* !ISO && IONIZED */
+#endif /* RESISTIVE */
 #endif /* MAGNETIC */
 
 #ifdef VARIABLE_GP
@@ -1813,14 +1836,12 @@ contains
 #endif /* COSM_RAY_ELECTRONS */
 #endif /* COSM_RAYS */
 #ifdef RESISTIVE
-            if (eta1_active) then
-               id = "RES"
-               call cmnlog_l(fmt_dtloc, 'max(eta)    ', id, etamax)
+            id = "RES"
+            call cmnlog_l(fmt_dtloc, 'max(eta)    ', id, etamax)
 #if !defined(ISO) && defined(IONIZED)
-               call cmnlog_l(fmt_dtloc, 'max(cu2)    ', id, cu2max)
-               call cmnlog_l(fmt_dtloc, 'min(dei)    ', id, deimin)
+            call cmnlog_l(fmt_dtloc, 'max(cu2)    ', id, cu2max)
+            call cmnlog_l(fmt_dtloc, 'min(dei)    ', id, deimin)
 #endif /* !ISO && IONIZED */
-            endif
 #endif /* RESISTIVE */
 #ifdef VARIABLE_GP
             id = "GPT"
