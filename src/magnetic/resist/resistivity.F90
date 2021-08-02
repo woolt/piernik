@@ -81,10 +81,11 @@ contains
       use cg_leaves,        only: leaves
       use cg_list,          only: cg_list_element
       use cg_list_global,   only: all_cg
-      use constants,        only: PIERNIK_INIT_GRID, GEO_XYZ, wcu_n, zero
+      use constants,        only: PIERNIK_INIT_GRID, DIVB_CT, GEO_XYZ, wcu_n, zero
       use dataio_pub,       only: die, code_progress, nh
       use domain,           only: dom
       use func,             only: operator(.notequals.)
+      use global,           only: divB_0_method
       use mpisetup,         only: rbuff, master, slave, piernik_MPI_Bcast
       use named_array_list, only: qna
 #if !defined(IONIZED) || defined(ISO)
@@ -148,6 +149,10 @@ contains
       endif
 
       eta1_active = (eta_1 .notequals. zero)
+      if (eta1_active .and. divB_0_method /= DIVB_CT) then
+         call warn("[resistivity:init_resistivity] Current-dependent resistivity is not implemented for cell-centered magnetic field.")
+         eta1_active = .false.
+      endif
 
       call all_cg%reg_var(wcu_n)
 #if !defined(ISO) && defined(IONIZED)
@@ -330,10 +335,9 @@ contains
       use grid_cont,        only: grid_container
       use named_array_list, only: qna
 #if !defined(ISO) && defined(IONIZED)
-      use constants,        only: DIVB_CT, small, xdim, ydim, zdim
+      use constants,        only: small, xdim, ydim, zdim
       use fluidindex,       only: flind
       use func,             only: ekin, emag
-      use global,           only: divB_0_method
       use named_array_list, only: wna
 #endif /* !ISO && IONIZED */
 
@@ -351,7 +355,7 @@ contains
       dt_eta = big ; dt_eint = big
 
 #if !defined(ISO) && defined(IONIZED)
-      if (divB_0_method == DIVB_CT) call compute_resist
+      call compute_resist
 #endif /* !ISO && IONIZED */
 
       cgl => leaves%first
@@ -366,20 +370,18 @@ contains
          if (max_eta > zero) dt_eta = min(dt_eta, cfl_resist * cg%dxmn2 / (2. * max_eta))
 
 #if !defined(ISO) && defined(IONIZED)
-         if (divB_0_method == DIVB_CT) then
-            uu => cg%w(wna%fi)%span(cg%ijkse)
-            bb => cg%w(wna%bi)%span(cg%ijkse)
-            dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
-            jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
-            if (eta1_active) then
-               dei = jc2 * cg%q(qna%ind(eta_n))%span(cg%ijkse) + small
-            else
-               dei = jc2 * eta_0 + small
-            endif
-            dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
-                  emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:))) / dei
-            dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
+         uu => cg%w(wna%fi)%span(cg%ijkse)
+         bb => cg%w(wna%bi)%span(cg%ijkse)
+         dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
+         jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
+         if (eta1_active) then
+            dei = jc2 * cg%q(qna%ind(eta_n))%span(cg%ijkse) + small
+         else
+            dei = jc2 * eta_0 + small
          endif
+         dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
+               emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:))) / dei
+         dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
 #endif /* !ISO && IONIZED */
          cgl => cgl%nxt
       enddo
