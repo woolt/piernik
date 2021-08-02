@@ -50,7 +50,7 @@ module resistivity
    real                                  :: eta_weight                     !< weight for smoothing eta; no smoothing if negative
    real                                  :: d_eta_factor
    type(value)                           :: etamax, cu2max, deimin
-   logical, save                         :: eta1_active = .true.           !< resistivity off-switcher while eta_1 == 0.0
+   logical                               :: eta1_active                    !< resistivity off-switcher while eta_1 == 0.0
    character(len=dsetnamelen), parameter :: eta_n = "eta", jcu_n = "jcu2", dei_n = "dei"
 
 contains
@@ -89,7 +89,7 @@ contains
       use mpisetup,         only: rbuff, master, slave, piernik_MPI_Bcast
       use named_array_list, only: qna
       use types,            only: value
-#if !defined(IONIZED) && defined(ISO)
+#if !defined(IONIZED) || defined(ISO)
       use dataio_pub,       only: warn
 #endif /* !IONIZED || ISO */
 
@@ -149,29 +149,29 @@ contains
 
       endif
 
+      eta1_active = (eta_1 .notequals. zero)
+
       call all_cg%reg_var(wcu_n)
-      call all_cg%reg_var(eta_n)
 #if !defined(ISO) && defined(IONIZED)
       call all_cg%reg_var(jcu_n)
       call all_cg%reg_var(dei_n)
-#endif /* !ISO && IONIZED */
-
-      cgl => leaves%first
-      do while (associated(cgl))
-         cgl%cg%q(qna%ind(eta_n))%arr = eta_0
-         cgl => cgl%nxt
-      enddo
-      etamax = value(eta_0, 0., [0., 0., 0.], [0, 0, 0], 0_4)
-
-      eta1_active = (eta_1 .notequals. zero)
-
-      if (eta1_active) then
-         jcrit2 = j_crit**2
-         d_eta_factor = 1./(2.*dom%eff_dim + eta_weight)
-#if !defined(IONIZED) && defined(ISO)
-         call warn("[resistivity:init_resistivity] eta_1 is set, but IONIZED gas is not included or ISO is set.")
+#else /* ISO || !IONIZED */
+         if (eta1_active) call warn("[resistivity:init_resistivity] eta_1 is set, but IONIZED gas is not included or ISO is set.")
          eta1_active = .false.
 #endif /* !IONIZED || ISO */
+
+      etamax = value(eta_0, 0., [0., 0., 0.], [0, 0, 0], 0_4)
+
+      if (eta1_active) then
+         call all_cg%reg_var(eta_n)
+         cgl => leaves%first
+         do while (associated(cgl))
+            cgl%cg%q(qna%ind(eta_n))%arr = eta_0
+            cgl => cgl%nxt
+         enddo
+
+         jcrit2 = j_crit**2
+         d_eta_factor = 1./(2.*dom%eff_dim + eta_weight)
       endif
 
    end subroutine init_resistivity
@@ -349,7 +349,7 @@ contains
       type(grid_container),   pointer   :: cg
       real                              :: dt_eta, dt_eint
 #if !defined(ISO) && defined(IONIZED)
-      real, dimension(:,:,:),   pointer :: eta, jc2, dei
+      real, dimension(:,:,:),   pointer :: jc2, dei
       real, dimension(:,:,:,:), pointer :: uu, bb
 #endif /* !ISO && IONIZED */
 
@@ -373,13 +373,17 @@ contains
             dt_eta = min(dt_eta, cfl_resist * cg%dxmn2 / (2. * etamax%val))
 #if !defined(ISO) && defined(IONIZED)
             if (divB_0_method == DIVB_CT) then
-               eta => cg%q(qna%ind(eta_n))%span(cg%ijkse)
-               jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
-               dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
                uu => cg%w(wna%fi)%span(cg%ijkse)
                bb => cg%w(wna%bi)%span(cg%ijkse)
+               dei => cg%q(qna%ind(dei_n))%span(cg%ijkse)
+               jc2 => cg%q(qna%ind(jcu_n))%span(cg%ijkse)
+               if (eta1_active) then
+                  dei = jc2 * cg%q(qna%ind(eta_n))%span(cg%ijkse) + small
+               else
+                  dei = jc2 * eta_0 + small
+               endif
                dei = (uu(flind%ion%ien,:,:,:) - ekin(uu(flind%ion%imx,:,:,:), uu(flind%ion%imy,:,:,:), uu(flind%ion%imz,:,:,:), uu(flind%ion%idn,:,:,:)) - &
-                     emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:)))/ (eta(:,:,:) * jc2 + small)
+                     emag(bb(xdim,:,:,:), bb(ydim,:,:,:), bb(zdim,:,:,:))) / dei
                dt_eint = min(dt_eint, deint_max * abs(minval(dei)))
             endif
 #endif /* !ISO && IONIZED */
@@ -407,7 +411,7 @@ contains
 !! \brief
 !! \todo overload me or use class(*) if you dare
 !<
-   subroutine vanleer_limiter(f,a,b)
+   subroutine vanleer_limiter(f, a, b)
 
       implicit none
 
@@ -417,21 +421,48 @@ contains
       ! locals
       real, dimension(size(a,1))        :: c !< a*b
 
-      c = a*b                                                                    !> \todo OPTIMIZE ME
+      c = a * b                                                                  !> \todo OPTIMIZE ME
       where (c > 0.0)
-         f = f+2.0*c/(a+b)
+         f = f + 2.0 * c / (a + b)
       endwhere
 
    end subroutine vanleer_limiter
 
-   subroutine tvdd_1d(b1d,eta1d,idi,dt,wcu1d)
+   subroutine tvdd_1d_eta0(b1d, idi, dt, wcu1d)
 
       use constants,     only: half
+
+      implicit none
+
+      real, dimension(:), pointer, intent(in)  :: b1d
+      real, dimension(:), pointer, intent(out) :: wcu1d
+      real, intent(in)                         :: idi, dt
+
+      real, dimension(size(b1d))               :: w, wp, wm, b1
+      integer                                  :: n
+
+      n = size(b1d)
+      w(2:n)    = eta_0 * ( b1d(2:n) - b1d(1:n-1) )*idi ;  w(1)  = w(2)
+      b1(1:n-1) = b1d(1:n-1) + half*(w(2:n) - w(1:n-1))*dt*idi; b1(n) = b1(n-1)
+
+      w(2:n)    = eta_0 * ( b1(2:n) - b1(1:n-1) )*idi   ; w(1)  = w(2)
+      wp(1:n-1) = half*(w(2:n) - w(1:n-1))              ; wp(n) = wp(n-1)
+      wm(2:n)   = wp(1:n-1)                             ; wm(1) = wm(2)
+
+      call vanleer_limiter(w, wm, wp)
+      wcu1d     = w * dt
+
+   end subroutine tvdd_1d_eta0
+
+   subroutine tvdd_1d_eta1(b1d, eta1d, idi, dt, wcu1d)
+
+      use constants,     only: half
+
       implicit none
 
       real, dimension(:), pointer, intent(in)  :: eta1d, b1d
       real, dimension(:), pointer, intent(out) :: wcu1d
-      real, intent(in)                         :: idi,dt
+      real, intent(in)                         :: idi, dt
 
       real, dimension(size(b1d))               :: w, wp, wm, b1
       integer                                  :: n
@@ -444,10 +475,10 @@ contains
       wp(1:n-1) = half*(w(2:n) - w(1:n-1))                   ; wp(n) = wp(n-1)
       wm(2:n)   = wp(1:n-1)                                  ; wm(1) = wm(2)
 
-      call vanleer_limiter(w,wm,wp)
-      wcu1d     = w*dt
+      call vanleer_limiter(w, wm, wp)
+      wcu1d     = w * dt
 
-   end subroutine tvdd_1d
+   end subroutine tvdd_1d_eta1
 
 !-------------------------------------------------------------------------------
 !
@@ -488,24 +519,35 @@ contains
       call compute_resist
 #endif /* !ISO && IONIZED */
 
+      wcu_i = qna%ind(wcu_n)
+
       cgl => leaves%first
       do while (associated(cgl))
          cg => cgl%cg
-         wcu_i = qna%ind(wcu_n)
-         eta_i = qna%ind(eta_n)
 
-         idmh(:) = cg%lhn(:,HI) - idm(:,etadir)
-         idml(:) = cg%lhn(:,LO) + idm(:,etadir)
-         cg%q(eta_i)%arr(cg%lhn(xdim,LO):idmh(xdim),cg%lhn(ydim,LO):idmh(ydim),cg%lhn(zdim,LO):idmh(zdim)) = half*(cg%q(eta_i)%span(cg%lhn(:,LO),idmh) + cg%q(eta_i)%span(idml,cg%lhn(:,HI)))
+         if (eta1_active) then
+            idmh(:) = cg%lhn(:,HI) - idm(:,etadir)
+            idml(:) = cg%lhn(:,LO) + idm(:,etadir)
+            eta_i = qna%ind(eta_n)
+            cg%q(eta_i)%arr(cg%lhn(xdim,LO):idmh(xdim),cg%lhn(ydim,LO):idmh(ydim),cg%lhn(zdim,LO):idmh(zdim)) = half*(cg%q(eta_i)%span(cg%lhn(:,LO),idmh) + cg%q(eta_i)%span(idml,cg%lhn(:,HI)))
 
-         do i1 = cg%lhn(n1,LO), cg%lhn(n1,HI)
-            do i2 = cg%lhn(n2,LO), cg%lhn(n2,HI)
-               b1d   => cg%w(wna%bi)%get_sweep(sdir,ibdir,i1,i2)
-               eta1d => cg%q(eta_i )%get_sweep(sdir,      i1,i2)
-               wcu1d => cg%q(wcu_i )%get_sweep(sdir,      i1,i2)
-               call tvdd_1d(b1d, eta1d, cg%idl(sdir), dt, wcu1d)
+            do i1 = cg%lhn(n1,LO), cg%lhn(n1,HI)
+               do i2 = cg%lhn(n2,LO), cg%lhn(n2,HI)
+                  b1d   => cg%w(wna%bi)%get_sweep(sdir, ibdir, i1, i2)
+                  eta1d => cg%q(eta_i )%get_sweep(sdir,        i1, i2)
+                  wcu1d => cg%q(wcu_i )%get_sweep(sdir,        i1, i2)
+                  call tvdd_1d_eta1(b1d, eta1d, cg%idl(sdir), dt, wcu1d)
+               enddo
             enddo
-         enddo
+         else
+            do i1 = cg%lhn(n1,LO), cg%lhn(n1,HI)
+               do i2 = cg%lhn(n2,LO), cg%lhn(n2,HI)
+                  b1d   => cg%w(wna%bi)%get_sweep(sdir, ibdir, i1, i2)
+                  wcu1d => cg%q(wcu_i )%get_sweep(sdir,        i1, i2)
+                  call tvdd_1d_eta0(b1d, cg%idl(sdir), dt, wcu1d)
+               enddo
+            enddo
+         endif
 
          cgl => cgl%nxt
       enddo
